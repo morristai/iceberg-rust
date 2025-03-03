@@ -2906,6 +2906,31 @@
 <a href="#2906" id="2906">2906</a>
 <a href="#2907" id="2907">2907</a>
 <a href="#2908" id="2908">2908</a>
+<a href="#2909" id="2909">2909</a>
+<a href="#2910" id="2910">2910</a>
+<a href="#2911" id="2911">2911</a>
+<a href="#2912" id="2912">2912</a>
+<a href="#2913" id="2913">2913</a>
+<a href="#2914" id="2914">2914</a>
+<a href="#2915" id="2915">2915</a>
+<a href="#2916" id="2916">2916</a>
+<a href="#2917" id="2917">2917</a>
+<a href="#2918" id="2918">2918</a>
+<a href="#2919" id="2919">2919</a>
+<a href="#2920" id="2920">2920</a>
+<a href="#2921" id="2921">2921</a>
+<a href="#2922" id="2922">2922</a>
+<a href="#2923" id="2923">2923</a>
+<a href="#2924" id="2924">2924</a>
+<a href="#2925" id="2925">2925</a>
+<a href="#2926" id="2926">2926</a>
+<a href="#2927" id="2927">2927</a>
+<a href="#2928" id="2928">2928</a>
+<a href="#2929" id="2929">2929</a>
+<a href="#2930" id="2930">2930</a>
+<a href="#2931" id="2931">2931</a>
+<a href="#2932" id="2932">2932</a>
+<a href="#2933" id="2933">2933</a>
 </pre></div><pre class="rust"><code><span class="comment">// Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -3103,7 +3128,7 @@
 
     key_metadata: Vec&lt;u8&gt;,
 
-    manifset_entries: Vec&lt;ManifestEntry&gt;,
+    manifest_entries: Vec&lt;ManifestEntry&gt;,
 
     metadata: ManifestMetadata,
 }
@@ -3189,7 +3214,7 @@
             deleted_rows: <span class="number">0</span>,
             min_seq_num: <span class="prelude-val">None</span>,
             key_metadata,
-            manifset_entries: Vec::new(),
+            manifest_entries: Vec::new(),
             metadata,
         }
     }
@@ -3203,7 +3228,7 @@
             .iter()
             .map(|f| PartitionFieldStats::new(f.field_type.as_primitive_type().unwrap().clone()))
             .collect();
-        <span class="kw">for </span>partition <span class="kw">in </span><span class="self">self</span>.manifset_entries.iter().map(|e| <span class="kw-2">&amp;</span>e.data_file.partition) {
+        <span class="kw">for </span>partition <span class="kw">in </span><span class="self">self</span>.manifest_entries.iter().map(|e| <span class="kw-2">&amp;</span>e.data_file.partition) {
             <span class="kw">for </span>(literal, stat) <span class="kw">in </span>partition.iter().zip_eq(field_stats.iter_mut()) {
                 <span class="kw">let </span>primitive_literal = literal.map(|v| v.as_primitive_literal().unwrap());
                 stat.update(primitive_literal)<span class="question-mark">?</span>;
@@ -3377,7 +3402,7 @@
                 <span class="self">self</span>.min_seq_num = <span class="prelude-val">Some</span>(<span class="self">self</span>.min_seq_num.map_or(seq_num, |v| min(v, seq_num)));
             }
         }
-        <span class="self">self</span>.manifset_entries.push(entry);
+        <span class="self">self</span>.manifest_entries.push(entry);
         <span class="prelude-val">Ok</span>(())
     }
 
@@ -3427,7 +3452,7 @@
 
         <span class="kw">let </span>partition_summary = <span class="self">self</span>.construct_partition_summaries(<span class="kw-2">&amp;</span>partition_type)<span class="question-mark">?</span>;
         <span class="comment">// Write manifest entries
-        </span><span class="kw">for </span>entry <span class="kw">in </span>std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.manifset_entries) {
+        </span><span class="kw">for </span>entry <span class="kw">in </span>std::mem::take(<span class="kw-2">&amp;mut </span><span class="self">self</span>.manifest_entries) {
             <span class="kw">let </span>value = <span class="kw">match </span><span class="self">self</span>.metadata.format_version {
                 FormatVersion::V1 =&gt; {
                     to_value(_serde::ManifestEntryV1::try_from(entry, <span class="kw-2">&amp;</span>partition_type)<span class="question-mark">?</span>)<span class="question-mark">?
@@ -3872,7 +3897,7 @@
     </span>schema: SchemaRef,
     <span class="doccomment">/// ID of the schema used to write the manifest as a string
     </span>schema_id: SchemaId,
-    <span class="doccomment">/// The partition spec used  to write the manifest
+    <span class="doccomment">/// The partition spec used to write the manifest
     </span>partition_spec: PartitionSpec,
     <span class="doccomment">/// Table format version number of the manifest as a string
     </span>format_version: FormatVersion,
@@ -3969,6 +3994,31 @@
             format_version,
             content,
         })
+    }
+
+    <span class="doccomment">/// Get the schema of table at the time manifest was written
+    </span><span class="kw">pub fn </span>schema(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>SchemaRef {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.schema
+    }
+
+    <span class="doccomment">/// Get the ID of schema used to write the manifest
+    </span><span class="kw">pub fn </span>schema_id(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; SchemaId {
+        <span class="self">self</span>.schema_id
+    }
+
+    <span class="doccomment">/// Get the partition spec used to write manifest
+    </span><span class="kw">pub fn </span>partition_spec(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>PartitionSpec {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.partition_spec
+    }
+
+    <span class="doccomment">/// Get the table format version
+    </span><span class="kw">pub fn </span>format_version(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>FormatVersion {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.format_version
+    }
+
+    <span class="doccomment">/// Get the type of content files tracked by manifest
+    </span><span class="kw">pub fn </span>content(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="kw-2">&amp;</span>ManifestContentType {
+        <span class="kw-2">&amp;</span><span class="self">self</span>.content
     }
 }
 
@@ -5599,21 +5649,21 @@
         }
         <span class="kw">let </span>res = writer.write_manifest_file().<span class="kw">await</span>.unwrap();
 
-        <span class="macro">assert!</span>(res.partitions.len() == <span class="number">3</span>);
-        <span class="macro">assert!</span>(res.partitions[<span class="number">0</span>].lower_bound == <span class="prelude-val">Some</span>(Datum::int(<span class="number">1111</span>)));
-        <span class="macro">assert!</span>(res.partitions[<span class="number">0</span>].upper_bound == <span class="prelude-val">Some</span>(Datum::int(<span class="number">2021</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions.len(), <span class="number">3</span>);
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">0</span>].lower_bound, <span class="prelude-val">Some</span>(Datum::int(<span class="number">1111</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">0</span>].upper_bound, <span class="prelude-val">Some</span>(Datum::int(<span class="number">2021</span>)));
         <span class="macro">assert!</span>(!res.partitions[<span class="number">0</span>].contains_null);
-        <span class="macro">assert!</span>(res.partitions[<span class="number">0</span>].contains_nan == <span class="prelude-val">Some</span>(<span class="bool-val">false</span>));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">0</span>].contains_nan, <span class="prelude-val">Some</span>(<span class="bool-val">false</span>));
 
-        <span class="macro">assert!</span>(res.partitions[<span class="number">1</span>].lower_bound == <span class="prelude-val">Some</span>(Datum::float(<span class="number">1.0</span>)));
-        <span class="macro">assert!</span>(res.partitions[<span class="number">1</span>].upper_bound == <span class="prelude-val">Some</span>(Datum::float(<span class="number">15.5</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">1</span>].lower_bound, <span class="prelude-val">Some</span>(Datum::float(<span class="number">1.0</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">1</span>].upper_bound, <span class="prelude-val">Some</span>(Datum::float(<span class="number">15.5</span>)));
         <span class="macro">assert!</span>(res.partitions[<span class="number">1</span>].contains_null);
-        <span class="macro">assert!</span>(res.partitions[<span class="number">1</span>].contains_nan == <span class="prelude-val">Some</span>(<span class="bool-val">true</span>));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">1</span>].contains_nan, <span class="prelude-val">Some</span>(<span class="bool-val">true</span>));
 
-        <span class="macro">assert!</span>(res.partitions[<span class="number">2</span>].lower_bound == <span class="prelude-val">Some</span>(Datum::double(<span class="number">1.0</span>)));
-        <span class="macro">assert!</span>(res.partitions[<span class="number">2</span>].upper_bound == <span class="prelude-val">Some</span>(Datum::double(<span class="number">25.5</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">2</span>].lower_bound, <span class="prelude-val">Some</span>(Datum::double(<span class="number">1.0</span>)));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">2</span>].upper_bound, <span class="prelude-val">Some</span>(Datum::double(<span class="number">25.5</span>)));
         <span class="macro">assert!</span>(!res.partitions[<span class="number">2</span>].contains_null);
-        <span class="macro">assert!</span>(res.partitions[<span class="number">2</span>].contains_nan == <span class="prelude-val">Some</span>(<span class="bool-val">false</span>));
+        <span class="macro">assert_eq!</span>(res.partitions[<span class="number">2</span>].contains_nan, <span class="prelude-val">Some</span>(<span class="bool-val">false</span>));
     }
 
     <span class="attr">#[tokio::test]
