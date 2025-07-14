@@ -247,8 +247,8 @@ iceberg-catalog-rest = &quot;0.2.0&quot;
 <h1 id="apache-iceberg-rust-downloads"><a class="header" href="#apache-iceberg-rust-downloads">Apache Iceberg™ Rust Downloads</a></h1>
 <p>The official Apache Iceberg-Rust releases are provided as source artifacts.</p>
 <h2 id="releases"><a class="header" href="#releases">Releases</a></h2>
-<p>The latest source release is <a href="https://www.apache.org/dyn/closer.lua/iceberg/apache-iceberg-rust-0.4.0/apache-iceberg-rust-0.4.0-src.tar.gz?action=download">0.4.0</a> (<a href="https://downloads.apache.org/iceberg/apache-iceberg-rust-0.4.0/apache-iceberg-rust-0.4.0-src.tar.gz.asc">asc</a>,
-<a href="https://downloads.apache.org/iceberg/apache-iceberg-rust-0.4.0/apache-iceberg-rust-0.4.0-src.tar.gz.sha512">sha512</a>).</p>
+<p>The latest source release is <a href="https://www.apache.org/dyn/closer.lua/iceberg/apache-iceberg-rust-0.5.1/apache-iceberg-rust-0.5.1-src.tar.gz?action=download">0.5.1</a> (<a href="https://downloads.apache.org/iceberg/apache-iceberg-rust-0.5.1/apache-iceberg-rust-0.5.1-src.tar.gz.asc">asc</a>,
+<a href="https://downloads.apache.org/iceberg/apache-iceberg-rust-0.5.1/apache-iceberg-rust-0.5.1-src.tar.gz.sha512">sha512</a>).</p>
 <p>For older releases, please check the <a href="https://archive.apache.org/dist/iceberg/">archive</a>.</p>
 <h2 id="notes"><a class="header" href="#notes">Notes</a></h2>
 <ul>
@@ -597,11 +597,13 @@ example of how to create a <code>RestCatalog</code>:</p>
     println!(&quot;Table {TABLE_NAME} created!&quot;);
 <span class="boring">
 </span><span class="boring">    // Ensure that the table is under the correct namespace.
-</span><span class="boring">    assert!(catalog
-</span><span class="boring">        .list_tables(&amp;namespace_ident)
-</span><span class="boring">        .await
-</span><span class="boring">        .unwrap()
-</span><span class="boring">        .contains(&amp;table_ident));
+</span><span class="boring">    assert!(
+</span><span class="boring">        catalog
+</span><span class="boring">            .list_tables(&amp;namespace_ident)
+</span><span class="boring">            .await
+</span><span class="boring">            .unwrap()
+</span><span class="boring">            .contains(&amp;table_ident)
+</span><span class="boring">    );
 </span><span class="boring">
 </span><span class="boring">    // Load the table back from the catalog. It should be identical to the created table.
 </span><span class="boring">    let loaded_table = catalog.load_table(&amp;table_ident).await.unwrap();
@@ -690,11 +692,13 @@ example of how to create a <code>RestCatalog</code>:</p>
 </span><span class="boring">    println!(&quot;Table {TABLE_NAME} created!&quot;);
 </span><span class="boring">
 </span>    // Ensure that the table is under the correct namespace.
-    assert!(catalog
-        .list_tables(&amp;namespace_ident)
-        .await
-        .unwrap()
-        .contains(&amp;table_ident));
+    assert!(
+        catalog
+            .list_tables(&amp;namespace_ident)
+            .await
+            .unwrap()
+            .contains(&amp;table_ident)
+    );
 
     // Load the table back from the catalog. It should be identical to the created table.
     let loaded_table = catalog.load_table(&amp;table_ident).await.unwrap();
@@ -996,15 +1000,7 @@ Checklist for reference:
 [ ] All source files have ASF headers
 [ ] Can compile from source
 
-More detailed checklist please refer to:
-https://github.com/apache/iceberg-rust/tree/main/scripts
-
-To compile from source, please refer to:
-https://github.com/apache/iceberg-rust/blob/main/CONTRIBUTING.md
-
-Here is a Python script in release to help you verify the release candidate:
-
-./scripts/verify.py
+More details please refer to https://rust.iceberg.apache.org/release.html#how-to-verify-a-release.
 
 Thanks
 
@@ -1039,6 +1035,30 @@ Thanks
 ${name}
 </code></pre>
 <p>Example: <a href="https://lists.apache.org/thread/xk5myl10mztcfotn59oo59s4ckvojds6">https://lists.apache.org/thread/xk5myl10mztcfotn59oo59s4ckvojds6</a></p>
+<h2 id="how-to-verify-a-release"><a class="header" href="#how-to-verify-a-release">How to verify a release</a></h2>
+<h3 id="validating-a-source-release"><a class="header" href="#validating-a-source-release">Validating a source release</a></h3>
+<p>A release contains links to following things:</p>
+<ul>
+<li>A source tarball</li>
+<li>A signature(.asc)</li>
+<li>A checksum(.sha512)</li>
+</ul>
+<p>After downloading them, here are the instructions on how to verify them.</p>
+<ul>
+<li>Import keys:</li>
+</ul>
+<pre><code class="language-bash">curl https://downloads.apache.org/iceberg/KEYS -o KEYS
+gpg --import KEYS
+</code></pre>
+<ul>
+<li>Verify the <code>.asc</code> file: <code>gpg --verify apache-iceberg-rust-${iceberg_version}.tar.gz.asc</code></li>
+<li>Verify the checksums: <code>shasum -a 512 apache-iceberg-rust-${iceberg_version}.tar.gz.sha512</code></li>
+<li>Verify build and test:</li>
+</ul>
+<pre><code class="language-bash">tar -xzf apache-iceberg-rust-${iceberg_version}.tar.gz
+cd apache-iceberg-rust-${iceberg_version}
+make build &amp;&amp; make test
+</code></pre>
 <h2 id="official-release"><a class="header" href="#official-release">Official Release</a></h2>
 <h3 id="push-the-release-git-tag"><a class="header" href="#push-the-release-git-tag">Push the release git tag</a></h3>
 <pre><code class="language-shell"># Checkout the tags that passed VOTE
