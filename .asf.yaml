@@ -40,7 +40,7 @@ github:
 
       required_pull_request_reviews:
         required_approving_review_count: 1
-        dismiss_stale_reviews: true
+        dismiss_stale_reviews: false
 
       required_linear_history: true
   del_branch_on_merge: true
@@ -52,6 +52,8 @@ github:
   collaborators:
     - JanKaul
     - c-thiel
+    - mbutrovich
+    - CTTY
   ghp_branch: gh-pages
   ghp_path: /
 
