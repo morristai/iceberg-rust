@@ -29,6 +29,11 @@ futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+anyhow = "1.0"
+iceberg-catalog-glue = { workspace = true }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+tokio-stream = "0.1.17"
+opendal = { workspace = true }
 
 [[example]]
 name = "rest-catalog-namespace"
@@ -37,6 +42,10 @@ path = "src/rest_catalog_namespace.rs"
 [[example]]
 name = "rest-catalog-table"
 path = "src/rest_catalog_table.rs"
+
+[[example]]
+name = "plan-files"
+path = "src/plan_files.rs"
 
 [[example]]
 name = "oss-backend"

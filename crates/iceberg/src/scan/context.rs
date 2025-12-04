@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use futures::channel::mpsc::Sender;
 use futures::{SinkExt, TryFutureExt};
-
+use opendal::Operator;
+use tokio::sync::mpsc::Sender as TokioSender;
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
@@ -101,6 +102,59 @@ impl ManifestFileContext {
     }
 }
 
+pub(crate) struct ManifestFileContextTokio {
+    pub manifest_file: ManifestFile,
+
+    sender: TokioSender<ManifestEntryContext>,
+
+    field_ids: Arc<Vec<i32>>,
+    bound_predicates: Option<Arc<BoundPredicates>>,
+    object_cache: Arc<ObjectCache>,
+    snapshot_schema: SchemaRef,
+    expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+    delete_file_index: DeleteFileIndex,
+}
+
+impl ManifestFileContextTokio {
+    /// Consumes this [`ManifestFileContext`], fetching its Manifest from FileIO and then
+    /// streaming its constituent [`ManifestEntries`] to the channel provided in the context
+    pub(crate) async fn fetch_manifest_and_stream_manifest_entries(self, op: Operator) -> Result<()> {
+        let ManifestFileContextTokio {
+            object_cache,
+            manifest_file,
+            bound_predicates,
+            snapshot_schema,
+            field_ids,
+            mut sender,
+            expression_evaluator_cache,
+            delete_file_index,
+            ..
+        } = self;
+
+        let manifest = object_cache.get_manifest_with_op(op, &manifest_file).await?;
+
+        for manifest_entry in manifest.entries() {
+            let manifest_entry_context = ManifestEntryContext {
+                // TODO: refactor to avoid the expensive ManifestEntry clone
+                manifest_entry: manifest_entry.clone(),
+                expression_evaluator_cache: expression_evaluator_cache.clone(),
+                field_ids: field_ids.clone(),
+                partition_spec_id: manifest_file.partition_spec_id,
+                bound_predicates: bound_predicates.clone(),
+                snapshot_schema: snapshot_schema.clone(),
+                delete_file_index: delete_file_index.clone(),
+            };
+
+            sender
+                .send(manifest_entry_context)
+                .map_err(|_| Error::new(ErrorKind::Unexpected, "mpsc channel SendError"))
+                .await?;
+        }
+
+        Ok(())
+    }
+}
+
 impl ManifestEntryContext {
     /// consume this `ManifestEntryContext`, returning a `FileScanTask`
     /// created from it
@@ -141,7 +195,7 @@ impl ManifestEntryContext {
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
 /// objects that are required to perform a scan file plan.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PlanContext {
     pub snapshot: SnapshotRef,
 
@@ -239,6 +293,58 @@ impl PlanContext {
         Ok(Box::new(filtered_mfcs.into_iter()))
     }
 
+    pub(crate) fn build_manifest_file_contexts_tokio(
+        &self,
+        manifest_list: Arc<ManifestList>,
+        tx_data: TokioSender<ManifestEntryContext>,
+        delete_file_idx: DeleteFileIndex,
+        delete_file_tx: TokioSender<ManifestEntryContext>,
+    ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContextTokio>> + 'static>> {
+        let manifest_files = manifest_list.entries().iter();
+
+        // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
+        let mut filtered_mfcs = vec![];
+        for manifest_file in manifest_files {
+            let tx = if manifest_file.content == ManifestContentType::Deletes {
+                delete_file_tx.clone()
+            } else {
+                tx_data.clone()
+            };
+
+            let partition_bound_predicate = if self.predicate.is_some() {
+                let partition_bound_predicate = self.get_partition_filter(manifest_file)?;
+
+                // evaluate the ManifestFile against the partition filter. Skip
+                // if it cannot contain any matching rows
+                if !self
+                    .manifest_evaluator_cache
+                    .get(
+                        manifest_file.partition_spec_id,
+                        partition_bound_predicate.clone(),
+                    )
+                    .eval(manifest_file)?
+                {
+                    continue;
+                }
+
+                Some(partition_bound_predicate)
+            } else {
+                None
+            };
+
+            let mfc = self.create_manifest_file_context_tokio(
+                manifest_file,
+                partition_bound_predicate,
+                tx,
+                delete_file_idx.clone(),
+            );
+
+            filtered_mfcs.push(Ok(mfc));
+        }
+
+        Ok(Box::new(filtered_mfcs.into_iter()))
+    }
+
     fn create_manifest_file_context(
         &self,
         manifest_file: &ManifestFile,
@@ -259,6 +365,37 @@ impl PlanContext {
             };
 
         ManifestFileContext {
+            manifest_file: manifest_file.clone(),
+            bound_predicates,
+            sender,
+            object_cache: self.object_cache.clone(),
+            snapshot_schema: self.snapshot_schema.clone(),
+            field_ids: self.field_ids.clone(),
+            expression_evaluator_cache: self.expression_evaluator_cache.clone(),
+            delete_file_index,
+        }
+    }
+
+    fn create_manifest_file_context_tokio(
+        &self,
+        manifest_file: &ManifestFile,
+        partition_filter: Option<Arc<BoundPredicate>>,
+        sender: TokioSender<ManifestEntryContext>,
+        delete_file_index: DeleteFileIndex,
+    ) -> ManifestFileContextTokio {
+        let bound_predicates =
+            if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
+                (partition_filter, &self.snapshot_bound_predicate)
+            {
+                Some(Arc::new(BoundPredicates {
+                    partition_bound_predicate: partition_bound_predicate.as_ref().clone(),
+                    snapshot_bound_predicate: snapshot_bound_predicate.as_ref().clone(),
+                }))
+            } else {
+                None
+            };
+
+        ManifestFileContextTokio {
             manifest_file: manifest_file.clone(),
             bound_predicates,
             sender,

@@ -140,6 +140,18 @@ impl FileIO {
         })
     }
 
+    /// Creates input file with given operator.
+    pub fn new_input_with_op(&self, op: Operator, path: impl AsRef<str>) -> Result<InputFile> {
+        let (op, relative_path) = self.inner.create_operator_with_op(op, &path)?;
+        let path = path.as_ref().to_string();
+        let relative_path_pos = path.len() - relative_path.len();
+        Ok(InputFile {
+            op,
+            path,
+            relative_path_pos,
+        })
+    }
+
     /// Creates output file.
     ///
     /// # Arguments

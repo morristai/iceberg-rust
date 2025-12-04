@@ -17,7 +17,7 @@
 
 use std::mem::size_of_val;
 use std::sync::Arc;
-
+use opendal::Operator;
 use crate::io::FileIO;
 use crate::spec::{
     FormatVersion, Manifest, ManifestFile, ManifestList, SchemaId, SnapshotRef, TableMetadataRef,
@@ -118,6 +118,39 @@ impl ObjectCache {
         }
     }
 
+    pub(crate) async fn get_manifest_with_op(&self, op: Operator, manifest_file: &ManifestFile) -> Result<Arc<Manifest>> {
+        if self.cache_disabled {
+            return manifest_file
+                .load_manifest_with_op(op, &self.file_io)
+                .await
+                .map(Arc::new);
+        }
+
+        let key = CachedObjectKey::Manifest(manifest_file.manifest_path.clone());
+
+        let cache_entry = self
+            .cache
+            .entry_by_ref(&key)
+            .or_try_insert_with(self.fetch_and_parse_manifest_with_op(op, manifest_file))
+            .await
+            .map_err(|err| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!("Failed to load manifest {}", manifest_file.manifest_path),
+                )
+                    .with_source(err)
+            })?
+            .into_value();
+
+        match cache_entry {
+            CachedItem::Manifest(arc_manifest) => Ok(arc_manifest),
+            _ => Err(Error::new(
+                ErrorKind::Unexpected,
+                format!("cached object for key '{key:?}' is not a Manifest"),
+            )),
+        }
+    }
+
     /// Retrieves an Arc [`ManifestList`] from the cache
     /// or retrieves one from FileIO and parses it if not present
     pub(crate) async fn get_manifest_list(
@@ -164,6 +197,12 @@ impl ObjectCache {
 
     async fn fetch_and_parse_manifest(&self, manifest_file: &ManifestFile) -> Result<CachedItem> {
         let manifest = manifest_file.load_manifest(&self.file_io).await?;
+
+        Ok(CachedItem::Manifest(Arc::new(manifest)))
+    }
+
+    async fn fetch_and_parse_manifest_with_op(&self, op: Operator, manifest_file: &ManifestFile) -> Result<CachedItem> {
+        let manifest = manifest_file.load_manifest_with_op(op, &self.file_io).await?;
 
         Ok(CachedItem::Manifest(Arc::new(manifest)))
     }
