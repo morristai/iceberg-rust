@@ -29,6 +29,11 @@ use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
+use opendal::Operator;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Sender as TokioSender;
+use tokio::time::Instant;
+use tracing::{debug, error, warn};
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
@@ -419,6 +424,142 @@ impl TableScan {
         Ok(file_scan_task_rx.boxed())
     }
 
+    /// Returns a stream of [`FileScanTask`]s.
+    pub async fn plan_files_tokio(&self, op: Operator) -> Result<mpsc::Receiver<Result<FileScanTask>>> {
+        let Some(plan_context) = self.plan_context.clone() else {
+            let (_, rx) = mpsc::channel(1);
+            return Ok(rx);
+        };
+
+        // let concurrency_files = self.concurrency_limit_manifest_files;
+        let concurrency_files = self.concurrency_limit_data_files;
+        let concurrency_entries = self.concurrency_limit_manifest_entries;
+
+        // 建立 Channels (使用 Tokio MPSC)
+        // 增加 buffer size 防止生產者因為單一邊消費者慢而卡住
+        // let (manifest_entry_data_tx, mut manifest_entry_data_rx) = mpsc::channel(concurrency_files * 4);
+        // let (manifest_entry_delete_tx, mut manifest_entry_delete_rx) = mpsc::channel(concurrency_files * 4);
+        let (manifest_entry_data_tx, mut manifest_entry_data_rx) = mpsc::channel(100_000);
+        let (manifest_entry_delete_tx, mut manifest_entry_delete_rx) = mpsc::channel(concurrency_files * 4);
+
+        // 最終結果的 Channel
+        let (file_scan_task_tx, file_scan_task_rx) = mpsc::channel(concurrency_entries);
+
+        // 共用的 Delete Index (假設這是 Thread-safe 的，如 Arc<RwLock<...>> 或 DashMap)
+        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new();
+
+        // 1. 【Producer Task】: 讀取 ManifestList 並分發 ManifestEntryContext
+        let plan_context_for_task = plan_context.clone();
+        let delete_idx_for_producer = delete_file_idx.clone();
+
+        // Task 1: Producer
+        tokio::spawn(async move {
+            let start = Instant::now();
+            debug!("Step 1: Start getting manifest list...");
+
+            // 1. 取得 Manifest List
+            let manifest_list = match plan_context_for_task.get_manifest_list().await {
+                Ok(list) => list,
+                Err(e) => {
+                    error!("Error getting manifest list: {:?}", e); // Debug 用
+                    // 建議: 這裡應該發送錯誤到 channel，或者直接 return
+                    return;
+                }
+            };
+
+            debug!("Step 1 Done: Got manifest list in {:?}", start.elapsed());
+
+            // 2. 建構 Contexts (這裡會把 data_tx 和 delete_tx 塞進去)
+            let start_build = Instant::now();
+            let manifest_file_contexts: Vec<_> = match plan_context_for_task.build_manifest_file_contexts_tokio(
+                manifest_list,
+                manifest_entry_data_tx,
+                delete_idx_for_producer,
+                manifest_entry_delete_tx,
+            ) {
+                // 這裡回傳的是 Iterator，我們馬上把它 collect 成 Vec
+                Ok(iter) => iter.collect(),
+                Err(e) => {
+                    error!("Error building contexts: {:?}", e);
+                    return;
+                }
+            };
+            for (i, ctx) in manifest_file_contexts.iter().enumerate() {
+                // ManifestFileContext 通常有一個 reference 指向 ManifestFile
+                // 試著印出 manifest_file().manifest_length()
+                // 如果找不到方法，就先印 ctx 的 Debug info
+                // debug!("Manifest {} info: {:?}", i, ctx);
+                let s = ctx.as_ref().unwrap().manifest_file.manifest_length;
+                debug!("Manifest {} length: {}", i, s);
+            }
+            debug!("Step 2 Done: Pull total {} manifest files in {:?}", manifest_file_contexts.len(), start_build.elapsed());
+            if manifest_file_contexts.is_empty() {
+                warn!("!! Warning: No manifest files found.");
+            }
+
+            // 3. 【關鍵修正】執行 Contexts
+            // 這些 Context 裡面包含 Sender，必須執行 fetch 方法才會開始送資料
+            let stream = futures::stream::iter(manifest_file_contexts);
+
+            // 使用 for_each_concurrent 並發地讀取 Manifest Files
+            let start_fetch = Instant::now();
+            let execution_result = stream.for_each_concurrent(concurrency_files, |ctx| {
+                let op = op.clone();
+                async move {
+                    let fetch_start = Instant::now();
+                    // 請確認這個方法名稱是否跟你修改後的一致
+                    if let Err(e) = ctx.unwrap().fetch_manifest_and_stream_manifest_entries(op).await {
+                        error!("Error inside fetch manifest entry: {:?}", e);
+                    }
+                    // 如果單個 fetch 超過 1 秒，這就是兇手
+                    if fetch_start.elapsed().as_secs() > 1 {
+                        debug!("--> Slow manifest fetch: {:?}", fetch_start.elapsed());
+                    }
+                }
+            }).await;
+            debug!("Step 3 Done: All manifests fetched in {:?}", start_fetch.elapsed());
+
+            // Channel 會在此 Task 結束後自動 Drop，通知下游(Consumer)資料傳完了
+        });
+
+        // 2. 【Delete Consumer Task】: 處理刪除檔
+        // 這裡我們使用 JoinSet 來管理背景的小任務，或者直接用 Stream 處理
+        let delete_tx_cloned = delete_file_tx.clone();
+        tokio::spawn(async move {
+            // 使用 futures::stream 來控制並發度，這比單純的 loop + spawn 更容易控制資源
+            let stream = async_stream::stream! {
+            while let Some(ctx) = manifest_entry_delete_rx.recv().await {
+                yield ctx;
+            }
+        };
+
+            stream.for_each_concurrent(concurrency_entries, |ctx| async {
+                let tx = delete_tx_cloned.clone();
+                // 呼叫原本的靜態方法
+                let _ = Self::process_delete_manifest_entry(ctx, tx).await;
+            }).await;
+        });
+
+        // 3. 【Data Consumer Task】: 處理資料檔並產出結果
+        tokio::spawn(async move {
+            let stream = async_stream::stream! {
+                while let Some(ctx) = manifest_entry_data_rx.recv().await {
+                    yield ctx;
+                }
+            };
+
+            stream.for_each_concurrent(concurrency_entries, |ctx| async {
+                let tx = file_scan_task_tx.clone();
+                // 呼叫原本的靜態方法，這裡處理完直接 send 回 file_scan_task_tx
+                let _ = Self::process_data_manifest_entry_tokio(ctx, tx).await;
+            }).await;
+        });
+
+        // 直接回傳 Receiver，讓外部使用者可以開始消費，
+        // 此時背景的三個 Task 已經在全速運轉了。
+        Ok(file_scan_task_rx)
+    }
+
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
         let mut arrow_reader_builder = ArrowReaderBuilder::new(self.file_io.clone())
@@ -496,6 +637,63 @@ impl TableScan {
         file_scan_task_tx
             .send(Ok(manifest_entry_context.into_file_scan_task().await?))
             .await?;
+
+        Ok(())
+    }
+
+    async fn process_data_manifest_entry_tokio(
+        manifest_entry_context: ManifestEntryContext,
+        mut file_scan_task_tx: TokioSender<Result<FileScanTask>>,
+    ) -> Result<()> {
+        // skip processing this manifest entry if it has been marked as deleted
+        if !manifest_entry_context.manifest_entry.is_alive() {
+            return Ok(());
+        }
+
+        // abort the plan if we encounter a manifest entry for a delete file
+        if manifest_entry_context.manifest_entry.content_type() != DataContentType::Data {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Encountered an entry for a delete file in a data file manifest",
+            ));
+        }
+
+        if let Some(ref bound_predicates) = manifest_entry_context.bound_predicates {
+            let BoundPredicates {
+                snapshot_bound_predicate,
+                partition_bound_predicate,
+            } = bound_predicates.as_ref();
+
+            let expression_evaluator_cache =
+                manifest_entry_context.expression_evaluator_cache.as_ref();
+
+            let expression_evaluator = expression_evaluator_cache.get(
+                manifest_entry_context.partition_spec_id,
+                partition_bound_predicate,
+            )?;
+
+            // skip any data file whose partition data indicates that it can't contain
+            // any data that matches this scan's filter
+            if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
+                return Ok(());
+            }
+
+            // skip any data file whose metrics don't match this scan's filter
+            if !InclusiveMetricsEvaluator::eval(
+                snapshot_bound_predicate,
+                manifest_entry_context.manifest_entry.data_file(),
+                false,
+            )? {
+                return Ok(());
+            }
+        }
+
+        // congratulations! the manifest entry has made its way through the
+        // entire plan without getting filtered out. Create a corresponding
+        // FileScanTask and push it to the result stream
+        file_scan_task_tx
+            .send(Ok(manifest_entry_context.into_file_scan_task().await?))
+            .await.unwrap();
 
         Ok(())
     }

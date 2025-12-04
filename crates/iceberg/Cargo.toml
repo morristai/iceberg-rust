@@ -93,6 +93,8 @@ typed-builder = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 zstd = { workspace = true }
+async-stream = "0.3.6"
+tracing = "0.1.43"
 
 [dev-dependencies]
 ctor = { workspace = true }

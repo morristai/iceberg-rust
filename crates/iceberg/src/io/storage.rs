@@ -219,7 +219,47 @@ impl Storage {
         Ok((operator, relative_path))
     }
 
-    /// Parse scheme.
+    pub(crate) fn create_operator_with_op<'a>(
+        &self,
+        op: Operator,
+        path: &'a impl AsRef<str>,
+    ) -> crate::Result<(Operator, &'a str)> {
+        let path = path.as_ref();
+        let (operator, relative_path): (Operator, &str) = match self {
+            #[cfg(feature = "storage-s3")]
+            Storage::S3 {
+                configured_scheme,
+                config,
+                customized_credential_load,
+            } => {
+                // let op = super::s3_config_build(config, customized_credential_load, path)?;
+                let op_info = op.info();
+
+                // Check prefix of s3 path.
+                let prefix = format!("{}://{}/", configured_scheme, op_info.name());
+                if path.starts_with(&prefix) {
+                    Ok((op, &path[prefix.len()..]))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid s3 url: {path}, should start with {prefix}"),
+                    ))
+                }
+            }
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "create_operator_with_op is only supported for S3 storage now",
+                ));
+            }
+        }?;
+
+        let operator = operator.layer(RetryLayer::new());
+
+        Ok((operator, relative_path))
+    }
+
+        /// Parse scheme.
     fn parse_scheme(scheme: &str) -> crate::Result<Scheme> {
         match scheme {
             "memory" => Ok(Scheme::Memory),
